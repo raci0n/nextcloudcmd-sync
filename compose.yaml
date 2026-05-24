@@ -1,0 +1,14 @@
+services:
+  nextcloudcmd-sync:
+    image: ghcr.io/raci0n/nextcloudcmd-sync:latest
+    restart: unless-stopped
+    environment:
+      - NC_USER=your_username
+      - NC_TOKEN=your_app_token
+      - NC_URL=https://cloud.example.com
+      - NC_PATH=/data
+      - NC_INTERVAL=60  # seconds
+      - PUID=3001
+      - PGID=3001
+    volumes:
+      - /your/local/folder:/data

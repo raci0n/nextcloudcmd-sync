@@ -1,0 +1,74 @@
+name: Build Runner Image
+
+on:
+  push:
+    paths:
+      - '.github/**'
+      - 'Dockerfile'
+  schedule:
+    - cron: '0 0 1 * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t nextcloudcmd-local .
+
+      - name: Get nextcloudcmd version from image
+        id: version
+        run: |
+          NC_VERSION=$(docker run --rm nextcloudcmd-local nextcloudcmd --version 2>&1 | grep -oP '\d+\.\d+\.\d+-\d+' | head -1)
+          if [ -z "$NC_VERSION" ]; then
+            echo "Could not determine nextcloudcmd version" >&2
+            exit 1
+          fi
+          echo "nc_version=$NC_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if version changed
+        id: check
+        run: |
+          CURRENT=$(cat VERSION 2>/dev/null || echo "")
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ steps.version.outputs.nc_version }}" = "$CURRENT" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update VERSION and CHANGELOG
+        if: steps.check.outputs.skip == 'false' && github.event_name == 'schedule'
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.nc_version }}"
+          echo "$NEW_VERSION" > VERSION
+          DATE=$(date +%Y-%m-%d)
+          if [ -f CHANGELOG.md ]; then
+            TMP=$(mktemp)
+            printf "## %s (%s)\n\n- Updated nextcloudcmd to version %s\n\n" "$NEW_VERSION" "$DATE" "$NEW_VERSION" > "$TMP"
+            cat CHANGELOG.md >> "$TMP"
+            mv "$TMP" CHANGELOG.md
+          else
+            printf "# Changelog\n\n## %s (%s)\n\n- Updated nextcloudcmd to version %s\n" "$NEW_VERSION" "$DATE" "$NEW_VERSION" > CHANGELOG.md
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION CHANGELOG.md
+          git commit -m "chore: bump nextcloudcmd to $NEW_VERSION"
+          git push
+
+      - name: Login to GitHub Container Registry
+        if: steps.check.outputs.skip == 'false'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Tag and push image
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          VERSION="${{ steps.version.outputs.nc_version }}"
+          docker tag nextcloudcmd-local ghcr.io/${{ github.repository }}:$VERSION
+          docker push ghcr.io/${{ github.repository }}:$VERSION
+          docker tag nextcloudcmd-local ghcr.io/${{ github.repository }}:latest
+          docker push ghcr.io/${{ github.repository }}:latest
