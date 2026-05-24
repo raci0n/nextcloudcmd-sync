@@ -1,13 +1,11 @@
-name: Build Runner Image
+name: Scheduled Version Check
 
 on:
-  push:
-    paths:
-      - '.github/**'
-      - 'Dockerfile'
+  schedule:
+    - cron: '0 0 1 * *'
 
 jobs:
-  build:
+  check-and-build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -28,14 +26,21 @@ jobs:
           fi
           echo "nc_version=$NC_VERSION" >> $GITHUB_OUTPUT
 
-      - name: Update VERSION and CHANGELOG if version changed
+      - name: Check if version changed
+        id: check
         run: |
           CURRENT=$(cat VERSION 2>/dev/null || echo "")
-          NEW_VERSION="${{ steps.version.outputs.nc_version }}"
-          if [ "$NEW_VERSION" = "$CURRENT" ]; then
-            echo "Version unchanged ($NEW_VERSION), skipping changelog update"
-            exit 0
+          if [ "${{ steps.version.outputs.nc_version }}" = "$CURRENT" ]; then
+            echo "Version unchanged ($CURRENT), nothing to do"
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
           fi
+
+      - name: Update VERSION and CHANGELOG
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.nc_version }}"
           echo "$NEW_VERSION" > VERSION
           DATE=$(date +%Y-%m-%d)
           if [ -f CHANGELOG.md ]; then
@@ -53,9 +58,11 @@ jobs:
           git push
 
       - name: Login to GitHub Container Registry
+        if: steps.check.outputs.changed == 'true'
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Tag and push image
+        if: steps.check.outputs.changed == 'true'
         run: |
           VERSION="${{ steps.version.outputs.nc_version }}"
           docker tag nextcloudcmd-local ghcr.io/${{ github.repository }}:$VERSION
